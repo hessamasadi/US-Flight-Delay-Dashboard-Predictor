@@ -9,11 +9,17 @@ import plotly.graph_objects as go
 import joblib
 import numpy as np
 import os
-import gdown
+import requests
+from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# Google Drive file IDs
+# Google Drive direct download links (using gdown format)
+# Convert share links to direct download links
+def get_direct_download_url(file_id):
+    return f"https://drive.google.com/uc?id={file_id}&export=download"
+
+# File IDs from your share links
 FILE_IDS = {
     'flights_dashboard_ready.csv': '1nRh-fpz6y1iKgkAJdVg_sagKwDw6Pi6X',
     'airports_filtered.csv': '1IIiIL0cWj1aJSNi42l1D5GvJoBBCcWmN',
@@ -25,19 +31,29 @@ FILE_IDS = {
 
 @st.cache_data
 def download_file(filename, file_id):
-    """Download file from Google Drive using gdown"""
-    url = f"https://drive.google.com/uc?id={file_id}"
-    output = f"/tmp/{filename}"
+    """Download file from Google Drive and cache it"""
+    url = get_direct_download_url(file_id)
     
-    # Download file (gdown.download returns the output path)
-    gdown.download(url, output, quiet=True)
-    
-    # For CSV files
-    if filename.endswith('.csv'):
-        return pd.read_csv(output)
-    # For PKL files
-    else:
-        return joblib.load(output)
+    with st.spinner(f"Downloading {filename} (first time only)..."):
+        response = requests.get(url, stream=True)
+        
+        # Handle Google Drive confirmation page
+        if 'confirm' in response.url:
+            # Extract confirm token and retry
+            import re
+            confirm_token = re.search(r'confirm=([^&]+)', response.url)
+            if confirm_token:
+                url = f"{url}&confirm={confirm_token.group(1)}"
+                response = requests.get(url, stream=True)
+        
+        response.raise_for_status()
+        
+        # For CSV files
+        if filename.endswith('.csv'):
+            return pd.read_csv(BytesIO(response.content))
+        # For PKL files
+        else:
+            return joblib.load(BytesIO(response.content))
 
 @st.cache_data
 def load_aggregated_data():
@@ -99,9 +115,8 @@ def load_valid_routes():
     return download_file('valid_routes.csv', FILE_IDS['valid_routes.csv'])
 
 # Load all data
-with st.spinner("Loading data (first time may take 2-3 minutes)..."):
-    (daily_airport_activity, daily_dep_delays, daily_airline_airport, 
-     airline_airport_agg, airport_summary, airports, date_range, airlines_list) = load_aggregated_data()
+(daily_airport_activity, daily_dep_delays, daily_airline_airport, 
+ airline_airport_agg, airport_summary, airports, date_range, airlines_list) = load_aggregated_data()
 
 # Filter airports to contiguous US
 contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
@@ -512,20 +527,15 @@ with tab4:
                     delta=prob_color
                 )
                 
-                # Use the already loaded flights data for flight time
                 avg_flight_time = None
                 try:
-                    # Calculate from existing aggregated data
-                    route_data = daily_dep_delays[daily_dep_delays['AIRPORT_CODE'] == origin]
-                    if len(route_data) > 0:
-                        # Get from the original flights data by re-reading
-                        flights_temp = download_file('flights_dashboard_ready.csv', FILE_IDS['flights_dashboard_ready.csv'])
-                        route_flights = flights_temp[
-                            (flights_temp['ORIGIN'] == origin) & 
-                            (flights_temp['DEST'] == destination)
-                        ]
-                        if len(route_flights) > 0:
-                            avg_flight_time = route_flights['ELAPSED_TIME'].mean()
+                    flight_time_df = download_file('flights_dashboard_ready.csv', FILE_IDS['flights_dashboard_ready.csv'])
+                    flight_time_df = flight_time_df[
+                        (flight_time_df['ORIGIN'] == origin) & 
+                        (flight_time_df['DEST'] == destination)
+                    ]
+                    if len(flight_time_df) > 0:
+                        avg_flight_time = flight_time_df['ELAPSED_TIME'].mean()
                 except:
                     pass
                 
