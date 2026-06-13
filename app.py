@@ -8,15 +8,53 @@ import plotly.express as px
 import plotly.graph_objects as go
 import joblib
 import numpy as np
+import os
+import requests
+from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
+
+def get_direct_download_url(file_id):
+    return f"https://drive.google.com/uc?id={file_id}&export=download"
+
+FILE_IDS = {
+    'flights_dashboard_ready.csv': '1nRh-fpz6y1iKgkAJdVg_sagKwDw6Pi6X',
+    'airports_filtered.csv': '1IIiIL0cWj1aJSNi42l1D5GvJoBBCcWmN',
+    'delay_regressor.pkl': '1KkYvOOKegz6_nckdrTLY0NQe1E-3cLzM',
+    'delay_classifier.pkl': '1LUNDFtOjJMTYk2tvkQW2KtaaotWv9QYX',
+    'label_encoders.pkl': '13famhi3vbswMqzwaLeeTFSeVnbVLucy_',
+    'valid_routes.csv': '1LOhz9kycmrviSuqLtWPoDV1CKDyE-60O'
+}
+
+@st.cache_data
+def download_file(filename, file_id):
+    """Download file from Google Drive and cache it"""
+    url = get_direct_download_url(file_id)
+    
+    with st.spinner(f"Downloading {filename} (first time only)..."):
+        response = requests.get(url, stream=True)
+        
+        if 'confirm' in response.url:
+            import re
+            confirm_token = re.search(r'confirm=([^&]+)', response.url)
+            if confirm_token:
+                url = f"{url}&confirm={confirm_token.group(1)}"
+                response = requests.get(url, stream=True)
+        
+        response.raise_for_status()
+        
+        if filename.endswith('.csv'):
+            return pd.read_csv(BytesIO(response.content))
+        else:
+            return joblib.load(BytesIO(response.content))
+
 @st.cache_data
 def load_aggregated_data():
-    flights = pd.read_csv(r'C:\Users\HessaM\Desktop\dataset\flights_dashboard_ready.csv')
+    flights = download_file('flights_dashboard_ready.csv', FILE_IDS['flights_dashboard_ready.csv'])
     flights['FL_DATE'] = pd.to_datetime(flights['FL_DATE'])
     
-    airports = pd.read_csv(r'C:\Users\HessaM\Desktop\dataset\airports_filtered.csv')
+    airports = download_file('airports_filtered.csv', FILE_IDS['airports_filtered.csv'])
     
     origin_counts = flights.groupby(['FL_DATE', 'ORIGIN']).size().reset_index(name='flight_count')
     origin_counts.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
@@ -61,10 +99,14 @@ def load_aggregated_data():
 
 @st.cache_resource
 def load_ml_models():
-    reg = joblib.load(r'C:\Users\HessaM\Desktop\dataset\delay_regressor.pkl')
-    clf = joblib.load(r'C:\Users\HessaM\Desktop\dataset\delay_classifier.pkl')
-    encoders = joblib.load(r'C:\Users\HessaM\Desktop\dataset\label_encoders.pkl')
+    reg = download_file('delay_regressor.pkl', FILE_IDS['delay_regressor.pkl'])
+    clf = download_file('delay_classifier.pkl', FILE_IDS['delay_classifier.pkl'])
+    encoders = download_file('label_encoders.pkl', FILE_IDS['label_encoders.pkl'])
     return reg, clf, encoders
+
+@st.cache_data
+def load_valid_routes():
+    return download_file('valid_routes.csv', FILE_IDS['valid_routes.csv'])
 
 (daily_airport_activity, daily_dep_delays, daily_airline_airport, 
  airline_airport_agg, airport_summary, airports, date_range, airlines_list) = load_aggregated_data()
@@ -139,7 +181,7 @@ airport_summary_filtered = airport_summary_filtered.merge(airport_summary_extra,
 airport_summary_filtered['max_delay'] = airport_summary_filtered['max_delay'].fillna(0)
 airport_summary_filtered['std_delay'] = airport_summary_filtered['std_delay'].fillna(0)
 
-valid_routes_df = pd.read_csv(r'C:\Users\HessaM\Desktop\dataset\valid_routes.csv')
+valid_routes_df = load_valid_routes()
 valid_origins = sorted(valid_routes_df['ORIGIN'].unique())
 
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map View", "✈️ Airline Analysis", "🏢 Airport Analysis", "🤖 Delay Predictor"])
@@ -393,7 +435,7 @@ with tab4:
         reg_model, clf_model, encoders = load_ml_models()
         models_loaded = True
     except Exception as e:
-        st.error(f"Models not found. Please run ml_train_balanced.py first.\nError: {str(e)}")
+        st.error(f"Models not found. Please check Google Drive links.\nError: {str(e)}")
         models_loaded = False
     
     if models_loaded:
@@ -475,7 +517,7 @@ with tab4:
                 
                 avg_flight_time = None
                 try:
-                    flight_time_df = pd.read_csv(r'C:\Users\HessaM\Desktop\dataset\flights_dashboard_ready.csv')
+                    flight_time_df = download_file('flights_dashboard_ready.csv', FILE_IDS['flights_dashboard_ready.csv'])
                     flight_time_df = flight_time_df[
                         (flight_time_df['ORIGIN'] == origin) & 
                         (flight_time_df['DEST'] == destination)
