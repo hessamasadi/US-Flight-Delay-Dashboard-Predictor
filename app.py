@@ -9,15 +9,11 @@ import plotly.graph_objects as go
 import joblib
 import numpy as np
 import os
-import requests
-from io import BytesIO
+import gdown
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-
-def get_direct_download_url(file_id):
-    return f"https://drive.google.com/uc?id={file_id}&export=download"
-
+# Google Drive file IDs
 FILE_IDS = {
     'flights_dashboard_ready.csv': '1nRh-fpz6y1iKgkAJdVg_sagKwDw6Pi6X',
     'airports_filtered.csv': '1IIiIL0cWj1aJSNi42l1D5GvJoBBCcWmN',
@@ -29,25 +25,19 @@ FILE_IDS = {
 
 @st.cache_data
 def download_file(filename, file_id):
-    """Download file from Google Drive and cache it"""
-    url = get_direct_download_url(file_id)
+    """Download file from Google Drive using gdown"""
+    url = f"https://drive.google.com/uc?id={file_id}"
     
-    with st.spinner(f"Downloading {filename} (first time only)..."):
-        response = requests.get(url, stream=True)
-        
-        if 'confirm' in response.url:
-            import re
-            confirm_token = re.search(r'confirm=([^&]+)', response.url)
-            if confirm_token:
-                url = f"{url}&confirm={confirm_token.group(1)}"
-                response = requests.get(url, stream=True)
-        
-        response.raise_for_status()
-        
-        if filename.endswith('.csv'):
-            return pd.read_csv(BytesIO(response.content))
-        else:
-            return joblib.load(BytesIO(response.content))
+    # For CSV files
+    if filename.endswith('.csv'):
+        output = f"/tmp/{filename}"
+        gdown.download(url, output, quiet=True, fuzzy=True)
+        return pd.read_csv(output)
+    # For PKL files
+    else:
+        output = f"/tmp/{filename}"
+        gdown.download(url, output, quiet=True, fuzzy=True)
+        return joblib.load(output)
 
 @st.cache_data
 def load_aggregated_data():
@@ -108,9 +98,12 @@ def load_ml_models():
 def load_valid_routes():
     return download_file('valid_routes.csv', FILE_IDS['valid_routes.csv'])
 
-(daily_airport_activity, daily_dep_delays, daily_airline_airport, 
- airline_airport_agg, airport_summary, airports, date_range, airlines_list) = load_aggregated_data()
+# Load all data
+with st.spinner("Loading data (first time may take 1-2 minutes)..."):
+    (daily_airport_activity, daily_dep_delays, daily_airline_airport, 
+     airline_airport_agg, airport_summary, airports, date_range, airlines_list) = load_aggregated_data()
 
+# Filter airports to contiguous US
 contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
 airports_continental = airports[airports['state'].isin(contiguous_states)].copy()
 
@@ -186,6 +179,7 @@ valid_origins = sorted(valid_routes_df['ORIGIN'].unique())
 
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map View", "✈️ Airline Analysis", "🏢 Airport Analysis", "🤖 Delay Predictor"])
 
+# ==================== TAB 1: MAP VIEW ====================
 with tab1:
     st.title("✈️ US Flight Delay Dashboard - Map View")
     
@@ -271,6 +265,7 @@ with tab1:
         else:
             st.warning(f"No data available for {selected_airport_code} in selected date range")
 
+# ==================== TAB 2: AIRLINE ANALYSIS ====================
 with tab2:
     st.title("✈️ Airline Performance Analysis")
     st.caption(f"Date range: {start_date} to {end_date}")
@@ -325,6 +320,7 @@ with tab2:
     else:
         st.warning(f"No data available for {selected_airline} in selected date range.")
 
+# ==================== TAB 3: AIRPORT ANALYSIS ====================
 with tab3:
     st.title("🏢 Airport Performance Analysis")
     st.caption(f"Date range: {start_date} to {end_date}")
@@ -427,6 +423,7 @@ with tab3:
     else:
         st.info("Please select at least one airport from the dropdown above to start the analysis.")
 
+# ==================== TAB 4: DELAY PREDICTOR ====================
 with tab4:
     st.title("🤖 Flight Delay Predictor")
     st.markdown("Predicts departure delay based on historical patterns for your selected route, airline, and departure time.")
