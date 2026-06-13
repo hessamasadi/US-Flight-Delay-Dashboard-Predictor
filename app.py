@@ -8,13 +8,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import joblib
 import numpy as np
-import requests
-from io import BytesIO
-import time
+import gdown
+import os
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# File IDs (extracted from your share links)
+# Google Drive file IDs
 FILE_IDS = {
     'flights_dashboard_ready.csv': '1nRh-fpz6y1iKgkAJdVg_sagKwDw6Pi6X',
     'airports_filtered.csv': '1IIiIL0cWj1aJSNi42l1D5GvJoBBCcWmN',
@@ -25,41 +24,31 @@ FILE_IDS = {
 }
 
 @st.cache_data
-def download_file(filename, file_id):
-    """Download file from Google Drive using direct download"""
-    # Use the direct download URL
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+def download_file_gdown(filename, file_id):
+    """Download file from Google Drive using gdown (handles large files)"""
+    url = f"https://drive.google.com/uc?id={file_id}"
+    output = f"/tmp/{filename}"
     
-    st.write(f"📥 Downloading {filename}...")
+    # Check if file already exists in /tmp
+    if os.path.exists(output):
+        st.write(f"  ✓ Using cached {filename}")
+    else:
+        st.write(f"  📥 Downloading {filename} from Google Drive...")
+        # gdown.download returns the output path
+        gdown.download(url, output, quiet=False, fuzzy=True)
+        
+        # Verify file was downloaded
+        if os.path.getsize(output) < 1000:
+            st.error(f"  ❌ {filename} download failed - file too small")
+            raise ValueError(f"Download failed for {filename}")
     
-    # Create session to handle cookies
-    session = requests.Session()
-    response = session.get(url, stream=True, allow_redirects=True)
-    
-    # Check if we got a virus scan warning page
-    content = response.content
-    
-    # Look for confirm token in response
-    if b'confirm=' in content:
-        # Extract confirm token
-        import re
-        match = re.search(b'confirm=([^&]+)', content)
-        if match:
-            confirm_token = match.group(1).decode()
-            st.write(f"  Handling Google Drive confirmation...")
-            # Retry with confirm token
-            url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-            response = session.get(url, stream=True, allow_redirects=True)
-            content = response.content
-    
-    # For CSV files
+    # Load based on file type
     if filename.endswith('.csv'):
-        df = pd.read_csv(BytesIO(content))
+        df = pd.read_csv(output)
         st.write(f"  ✓ {filename}: {len(df):,} rows, {len(df.columns)} columns")
         return df
-    # For PKL files
     else:
-        obj = joblib.load(BytesIO(content))
+        obj = joblib.load(output)
         st.write(f"  ✓ {filename} loaded")
         return obj
 
@@ -67,10 +56,15 @@ def download_file(filename, file_id):
 def load_aggregated_data():
     st.write("🔄 Loading and aggregating data...")
     
-    flights = download_file('flights_dashboard_ready.csv', FILE_IDS['flights_dashboard_ready.csv'])
-    flights['FL_DATE'] = pd.to_datetime(flights['FL_DATE'])
+    flights = download_file_gdown('flights_dashboard_ready.csv', FILE_IDS['flights_dashboard_ready.csv'])
     
-    airports = download_file('airports_filtered.csv', FILE_IDS['airports_filtered.csv'])
+    # Verify data
+    if len(flights) == 0:
+        st.error("Downloaded file is empty. Please check Google Drive permissions.")
+        st.stop()
+    
+    flights['FL_DATE'] = pd.to_datetime(flights['FL_DATE'])
+    airports = download_file_gdown('airports_filtered.csv', FILE_IDS['airports_filtered.csv'])
     
     st.write("  Aggregating flight counts...")
     origin_counts = flights.groupby(['FL_DATE', 'ORIGIN']).size().reset_index(name='flight_count')
@@ -120,15 +114,15 @@ def load_aggregated_data():
 @st.cache_resource
 def load_ml_models():
     st.write("🔄 Loading ML models...")
-    reg = download_file('delay_regressor.pkl', FILE_IDS['delay_regressor.pkl'])
-    clf = download_file('delay_classifier.pkl', FILE_IDS['delay_classifier.pkl'])
-    encoders = download_file('label_encoders.pkl', FILE_IDS['label_encoders.pkl'])
+    reg = download_file_gdown('delay_regressor.pkl', FILE_IDS['delay_regressor.pkl'])
+    clf = download_file_gdown('delay_classifier.pkl', FILE_IDS['delay_classifier.pkl'])
+    encoders = download_file_gdown('label_encoders.pkl', FILE_IDS['label_encoders.pkl'])
     st.write("✅ ML models loaded!")
     return reg, clf, encoders
 
 @st.cache_data
 def load_valid_routes():
-    return download_file('valid_routes.csv', FILE_IDS['valid_routes.csv'])
+    return download_file_gdown('valid_routes.csv', FILE_IDS['valid_routes.csv'])
 
 # Main app
 st.title("✈️ US Flight Delay Dashboard & Predictor")
