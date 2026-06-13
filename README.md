@@ -53,4 +53,3 @@ Interactive dashboard and ML prediction tool for US domestic flights (2019–202
 - **ML:** Scikit-learn (Random Forest Regressor + Classifier)
 - **Data:** Pandas, NumPy
 
-## File Structure
