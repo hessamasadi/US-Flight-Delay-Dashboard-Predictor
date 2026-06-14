@@ -14,7 +14,7 @@ import time
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# Hugging Face URLs (using Parquet for flights)
+# Hugging Face URLs
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
 
 # Use Parquet for flights (much faster and smaller)
@@ -26,9 +26,10 @@ CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
 # Memory-optimized data loading with progress tracking
+# Note: Underscore prefixes (_progress_placeholder) tell Streamlit NOT to hash these arguments
 @st.cache_data(ttl=86400)
-def load_flights(progress_placeholder):
-    progress_placeholder.text("📊 Loading flight data (Parquet)...")
+def load_flights(_progress_placeholder):
+    _progress_placeholder.text("📊 Loading flight data (Parquet)...")
     df = pd.read_parquet(FLIGHTS_URL)
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
     
@@ -41,19 +42,19 @@ def load_flights(progress_placeholder):
     return df
 
 @st.cache_data(ttl=86400)
-def load_airports(progress_placeholder):
-    progress_placeholder.text("🗺️ Loading airport data...")
+def load_airports(_progress_placeholder):
+    _progress_placeholder.text("🗺️ Loading airport data...")
     df = pd.read_csv(AIRPORTS_URL)
     return df[['AIRPORT_CODE', 'name', 'city', 'state', 'latitude', 'longitude']]
 
 @st.cache_data(ttl=86400)
-def load_valid_routes(progress_placeholder):
-    progress_placeholder.text("🛣️ Loading route data...")
+def load_valid_routes(_progress_placeholder):
+    _progress_placeholder.text("🛣️ Loading route data...")
     return pd.read_csv(VALID_ROUTES_URL)
 
 @st.cache_resource(ttl=86400)
-def load_models(progress_placeholder):
-    progress_placeholder.text("🤖 Loading ML models...")
+def load_models(_progress_placeholder):
+    _progress_placeholder.text("🤖 Loading ML models...")
     reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL, timeout=180).content))
     clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL, timeout=180).content))
     encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
