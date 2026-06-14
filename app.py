@@ -8,80 +8,56 @@ import plotly.express as px
 import plotly.graph_objects as go
 import joblib
 import numpy as np
-import gdown
-import os
+import requests
+from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# ------------------------------------------------------------------
-# 1. Define your Google Drive file IDs (from your share links)
-# ------------------------------------------------------------------
-FILE_IDS = {
-    'flights_dashboard_ready.csv': '1nRh-fpz6y1iKgkAJdVg_sagKwDw6Pi6X',
-    'airports_filtered.csv': '1IIiIL0cWj1aJSNi42l1D5GvJoBBCcWmN',
-    'delay_regressor.pkl': '1KkYvOOKegz6_nckdrTLY0NQe1E-3cLzM',
-    'delay_classifier.pkl': '1LUNDFtOjJMTYk2tvkQW2KtaaotWv9QYX',
-    'label_encoders.pkl': '13famhi3vbswMqzwaLeeTFSeVnbVLucy_',
-    'valid_routes.csv': '1LOhz9kycmrviSuqLtWPoDV1CKDyE-60O'
+# Hugging Face direct download URLs
+URLS = {
+    'flights_dashboard_ready.csv': 'https://huggingface.co/hessamedin/flight-delay-models/resolve/main/flights_dashboard_ready.csv',
+    'airports_filtered.csv': 'https://huggingface.co/hessamedin/flight-delay-models/resolve/main/airports_filtered.csv',
+    'delay_regressor.pkl': 'https://huggingface.co/hessamedin/flight-delay-models/resolve/main/delay_regressor.pkl',
+    'delay_classifier.pkl': 'https://huggingface.co/hessamedin/flight-delay-models/resolve/main/delay_classifier.pkl',
+    'label_encoders.pkl': 'https://huggingface.co/hessamedin/flight-delay-models/resolve/main/label_encoders.pkl',
+    'valid_routes.csv': 'https://huggingface.co/hessamedin/flight-delay-models/resolve/main/valid_routes.csv'
 }
 
-# ------------------------------------------------------------------
-# 2. Helper function to download any file from Google Drive
-#    Uses gdown with fuzzy=True to bypass the virus scan warning
-# ------------------------------------------------------------------
-def download_file_from_drive(file_id, output_path):
-    """Download a file from Google Drive using gdown."""
-    if not os.path.exists(output_path):
-        url = f"https://drive.google.com/uc?id={file_id}"
-        with st.spinner(f"Downloading {os.path.basename(output_path)} ... (first time only)"):
-            gdown.download(url, output_path, quiet=False, fuzzy=True)
+@st.cache_data
+def download_file(url, file_type='csv'):
+    """Download file from Hugging Face URL"""
+    response = requests.get(url)
+    response.raise_for_status()
+    
+    if file_type == 'csv':
+        return pd.read_csv(BytesIO(response.content))
     else:
-        st.write(f"✓ Using cached {os.path.basename(output_path)}")
+        return joblib.load(BytesIO(response.content))
 
-# ------------------------------------------------------------------
-# 3. Load all data and models with caching
-# ------------------------------------------------------------------
-@st.cache_resource
+@st.cache_data
 def load_flights_data():
-    flights_path = "/tmp/flights_dashboard_ready.csv"
-    download_file_from_drive(FILE_IDS['flights_dashboard_ready.csv'], flights_path)
-    flights = pd.read_csv(flights_path)
+    flights = download_file(URLS['flights_dashboard_ready.csv'], 'csv')
     flights['FL_DATE'] = pd.to_datetime(flights['FL_DATE'])
     return flights
 
-@st.cache_resource
+@st.cache_data
 def load_airports():
-    airports_path = "/tmp/airports_filtered.csv"
-    download_file_from_drive(FILE_IDS['airports_filtered.csv'], airports_path)
-    return pd.read_csv(airports_path)
+    return download_file(URLS['airports_filtered.csv'], 'csv')
 
-@st.cache_resource
+@st.cache_data
 def load_valid_routes():
-    routes_path = "/tmp/valid_routes.csv"
-    download_file_from_drive(FILE_IDS['valid_routes.csv'], routes_path)
-    return pd.read_csv(routes_path)
+    return download_file(URLS['valid_routes.csv'], 'csv')
 
 @st.cache_resource
 def load_ml_models():
-    reg_path = "/tmp/delay_regressor.pkl"
-    clf_path = "/tmp/delay_classifier.pkl"
-    enc_path = "/tmp/label_encoders.pkl"
-    
-    download_file_from_drive(FILE_IDS['delay_regressor.pkl'], reg_path)
-    download_file_from_drive(FILE_IDS['delay_classifier.pkl'], clf_path)
-    download_file_from_drive(FILE_IDS['label_encoders.pkl'], enc_path)
-    
-    reg = joblib.load(reg_path)
-    clf = joblib.load(clf_path)
-    encoders = joblib.load(enc_path)
-    
+    reg = download_file(URLS['delay_regressor.pkl'], 'pkl')
+    clf = download_file(URLS['delay_classifier.pkl'], 'pkl')
+    encoders = download_file(URLS['label_encoders.pkl'], 'pkl')
     return reg, clf, encoders
 
-# ------------------------------------------------------------------
-# 4. Load everything (progress bar, then cache)
-# ------------------------------------------------------------------
+# Load everything
 st.title("✈️ US Flight Delay Dashboard & Predictor")
-st.info("📡 Loading data from Google Drive. First load may take 2-3 minutes. Please wait...")
+st.info("📡 Loading data from Hugging Face. First load may take 2-3 minutes. Please wait...")
 
 progress_text = st.empty()
 progress_bar = st.progress(0)
@@ -104,119 +80,77 @@ progress_bar.progress(80)
 
 progress_text.text("Preparing data for dashboard...")
 
-# ------------------------------------------------------------------
-# 5. Pre‑aggregate for performance (using the flights DataFrame)
-#    This runs only once, then caches the results
-# ------------------------------------------------------------------
-@st.cache_resource
-def pre_aggregate(flights, airports):
-    # Filter to contiguous US
-    contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
-    airports_continental = airports[airports['state'].isin(contiguous_states)].copy()
-    
-    # Daily airport activity
-    origin_counts = flights.groupby(['FL_DATE', 'ORIGIN']).size().reset_index(name='flight_count')
-    origin_counts.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
-    dest_counts = flights.groupby(['FL_DATE', 'DEST']).size().reset_index(name='flight_count')
-    dest_counts.rename(columns={'DEST': 'AIRPORT_CODE'}, inplace=True)
-    all_activity = pd.concat([origin_counts, dest_counts])
-    daily_airport_activity = all_activity.groupby(['FL_DATE', 'AIRPORT_CODE'])['flight_count'].sum().reset_index()
-    
-    # Daily delays by airport
-    daily_dep_delays = flights.groupby(['FL_DATE', 'ORIGIN']).agg(avg_dep_delay=('DEP_DELAY', 'mean')).reset_index()
-    daily_dep_delays.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
-    
-    # Airline + airport aggregate
-    airline_airport_agg = flights.groupby(['AIRLINE', 'ORIGIN']).agg(
-        avg_delay=('DEP_DELAY', 'mean'),
-        flight_count=('DEP_DELAY', 'count')
-    ).reset_index()
-    airline_airport_agg.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
-    
-    # Daily airline + airport
-    daily_airline_airport = flights.groupby(['FL_DATE', 'AIRLINE', 'ORIGIN']).agg(
-        avg_delay=('DEP_DELAY', 'mean'),
-        flight_count=('DEP_DELAY', 'count')
-    ).reset_index()
-    daily_airline_airport.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
-    
-    # Airport summary (full, pre‑computed)
-    airport_summary = flights.groupby('ORIGIN').agg(
-        total_flights=('DEP_DELAY', 'count'),
-        avg_delay=('DEP_DELAY', 'mean'),
-        median_delay=('DEP_DELAY', 'median'),
-        max_delay=('DEP_DELAY', 'max'),
-        std_delay=('DEP_DELAY', 'std')
-    ).reset_index()
-    airport_summary.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
-    
-    # Date range and airline list
-    date_range = flights[['FL_DATE']].drop_duplicates().sort_values('FL_DATE')
-    airlines_list = sorted(flights['AIRLINE'].unique())
-    
-    return (daily_airport_activity, daily_dep_delays, daily_airline_airport,
-            airline_airport_agg, airport_summary, airports_continental,
-            date_range, airlines_list)
+# Pre-aggregation
+contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
+airports_continental = airports[airports['state'].isin(contiguous_states)].copy()
 
-# Run pre‑aggregation and clear progress indicators
-(daily_airport_activity, daily_dep_delays, daily_airline_airport,
- airline_airport_agg, airport_summary, airports_continental,
- date_range, airlines_list) = pre_aggregate(flights, airports)
+origin_counts = flights.groupby(['FL_DATE', 'ORIGIN']).size().reset_index(name='flight_count')
+origin_counts.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+dest_counts = flights.groupby(['FL_DATE', 'DEST']).size().reset_index(name='flight_count')
+dest_counts.rename(columns={'DEST': 'AIRPORT_CODE'}, inplace=True)
+all_activity = pd.concat([origin_counts, dest_counts])
+daily_airport_activity = all_activity.groupby(['FL_DATE', 'AIRPORT_CODE'])['flight_count'].sum().reset_index()
+
+daily_dep_delays = flights.groupby(['FL_DATE', 'ORIGIN']).agg(avg_dep_delay=('DEP_DELAY', 'mean')).reset_index()
+daily_dep_delays.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+
+airline_airport_agg = flights.groupby(['AIRLINE', 'ORIGIN']).agg(
+    avg_delay=('DEP_DELAY', 'mean'),
+    flight_count=('DEP_DELAY', 'count')
+).reset_index()
+airline_airport_agg.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+
+daily_airline_airport = flights.groupby(['FL_DATE', 'AIRLINE', 'ORIGIN']).agg(
+    avg_delay=('DEP_DELAY', 'mean'),
+    flight_count=('DEP_DELAY', 'count')
+).reset_index()
+daily_airline_airport.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+
+airport_summary = flights.groupby('ORIGIN').agg(
+    total_flights=('DEP_DELAY', 'count'),
+    avg_delay=('DEP_DELAY', 'mean'),
+    median_delay=('DEP_DELAY', 'median'),
+    max_delay=('DEP_DELAY', 'max'),
+    std_delay=('DEP_DELAY', 'std')
+).reset_index()
+airport_summary.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+
+date_range = flights[['FL_DATE']].drop_duplicates().sort_values('FL_DATE')
+airlines_list = sorted(flights['AIRLINE'].unique())
 
 progress_bar.progress(100)
 progress_text.empty()
 progress_bar.empty()
-
 st.success("✅ All data loaded and aggregated successfully!")
 
-# ------------------------------------------------------------------
-# 6. Sidebar: Global Date Filter (applied to all tabs)
-# ------------------------------------------------------------------
+# Sidebar Filters
 st.sidebar.header("Global Filters")
 min_date = date_range['FL_DATE'].min()
 max_date = date_range['FL_DATE'].max()
-
 start_date = st.sidebar.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
 end_date = st.sidebar.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
 
 start_datetime = pd.Timestamp(start_date)
 end_datetime = pd.Timestamp(end_date)
 
-# Filter the pre‑aggregated data by the selected date range
-filtered_activity = daily_airport_activity[
-    (daily_airport_activity['FL_DATE'] >= start_datetime) &
-    (daily_airport_activity['FL_DATE'] <= end_datetime)
-]
+filtered_activity = daily_airport_activity[(daily_airport_activity['FL_DATE'] >= start_datetime) & (daily_airport_activity['FL_DATE'] <= end_datetime)]
+filtered_dep_delays = daily_dep_delays[(daily_dep_delays['FL_DATE'] >= start_datetime) & (daily_dep_delays['FL_DATE'] <= end_datetime)]
+filtered_daily_airline = daily_airline_airport[(daily_airline_airport['FL_DATE'] >= start_datetime) & (daily_airline_airport['FL_DATE'] <= end_datetime)]
 
-filtered_dep_delays = daily_dep_delays[
-    (daily_dep_delays['FL_DATE'] >= start_datetime) &
-    (daily_dep_delays['FL_DATE'] <= end_datetime)
-]
-
-filtered_daily_airline = daily_airline_airport[
-    (daily_airline_airport['FL_DATE'] >= start_datetime) &
-    (daily_airline_airport['FL_DATE'] <= end_datetime)
-]
-
-# Totals for the selected period
 total_flights_per_airport = filtered_activity.groupby('AIRPORT_CODE')['flight_count'].sum().reset_index()
 total_flights_per_airport.columns = ['AIRPORT_CODE', 'total_flights']
-
 avg_dep_delay_per_airport = filtered_dep_delays.groupby('AIRPORT_CODE')['avg_dep_delay'].mean().reset_index()
 
 airport_metrics = airports_continental.merge(total_flights_per_airport, on='AIRPORT_CODE', how='inner')
 airport_metrics = airport_metrics.merge(avg_dep_delay_per_airport, on='AIRPORT_CODE', how='left')
 airport_metrics['avg_dep_delay'] = airport_metrics['avg_dep_delay'].round(1).fillna(0)
-
 total_flights_period = filtered_activity['flight_count'].sum()
 
-# Airline + airport for the selected period
 airline_airport_filtered_global = filtered_daily_airline.groupby(['AIRLINE', 'AIRPORT_CODE']).agg(
     avg_delay=('avg_delay', 'mean'),
     flight_count=('flight_count', 'sum')
 ).reset_index()
 
-# Airport percentages
 airport_pct = filtered_dep_delays.groupby('AIRPORT_CODE').agg(
     pct_late=('avg_dep_delay', lambda x: (x > 0).mean() * 100),
     pct_early=('avg_dep_delay', lambda x: (x < 0).mean() * 100),
@@ -228,7 +162,6 @@ airport_summary_filtered['pct_late'] = airport_summary_filtered['pct_late'].fill
 airport_summary_filtered['pct_early'] = airport_summary_filtered['pct_early'].fillna(0).round(1)
 airport_summary_filtered['pct_on_time'] = airport_summary_filtered['pct_on_time'].fillna(0).round(1)
 
-# Add max_delay and std_delay from the full summary (static)
 airport_summary_extra = airport_summary[['AIRPORT_CODE', 'max_delay', 'std_delay']]
 airport_summary_filtered = airport_summary_filtered.merge(airport_summary_extra, on='AIRPORT_CODE', how='left')
 airport_summary_filtered['max_delay'] = airport_summary_filtered['max_delay'].fillna(0)
@@ -236,14 +169,11 @@ airport_summary_filtered['std_delay'] = airport_summary_filtered['std_delay'].fi
 
 valid_origins = sorted(valid_routes_df['ORIGIN'].unique())
 
-# ------------------------------------------------------------------
-# 7. Tabs
-# ------------------------------------------------------------------
+# Tabs
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map View", "✈️ Airline Analysis", "🏢 Airport Analysis", "🤖 Delay Predictor"])
 
-# ---------------------------- TAB 1: MAP ---------------------------------
 with tab1:
-    st.subheader("🗺️ Airport Departure Delay Map (Continental US)")
+    st.subheader("🗺️ Airport Departure Delay Map")
     col1, col2, col3 = st.columns(3)
     col1.metric("📅 Date Range", f"{start_date} to {end_date}")
     col2.metric("🛫 Total Flights", f"{total_flights_period:,}")
@@ -270,7 +200,6 @@ with tab1:
             ).add_to(m)
     st_folium(m, width=900, height=500)
 
-# ---------------------------- TAB 2: AIRLINE ANALYSIS ---------------------
 with tab2:
     st.subheader("✈️ Airline Performance Analysis")
     selected_airline = st.selectbox("Select Airline:", options=airlines_list)
@@ -295,7 +224,6 @@ with tab2:
     else:
         st.warning(f"No data for {selected_airline} in selected date range.")
 
-# ---------------------------- TAB 3: AIRPORT ANALYSIS ---------------------
 with tab3:
     st.subheader("🏢 Airport Performance Analysis")
     available = sorted(airport_summary_filtered['AIRPORT_CODE'].unique())
@@ -306,7 +234,6 @@ with tab3:
         fig = px.bar(comp, x='AIRPORT_CODE', y='avg_delay', color='pct_late', title="Airport Comparison")
         st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------- TAB 4: DELAY PREDICTOR ---------------------
 with tab4:
     st.subheader("🤖 Flight Delay Predictor")
     col1, col2 = st.columns(2)
@@ -345,4 +272,4 @@ with tab4:
             st.error(f"Prediction error: {e}")
 
 st.markdown("---")
-st.caption("Data source: US Flight Delays 2019-2023 | Continental US only | Data & models loaded from Google Drive using gdown")
+st.caption("Data source: US Flight Delays 2019-2023 | Continental US only | Data loaded from Hugging Face")
