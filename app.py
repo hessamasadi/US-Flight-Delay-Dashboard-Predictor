@@ -18,7 +18,8 @@ st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 # ------------------------------------------------------------------
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
 
-CSV_URL = f"{BASE_URL}/flights_dashboard_ready.csv"
+# Using Parquet format (41 MB instead of 289 MB)
+FLIGHTS_URL = f"{BASE_URL}/flights_dashboard_ready.parquet"
 AIRPORTS_URL = f"{BASE_URL}/airports_filtered.csv"
 VALID_ROUTES_URL = f"{BASE_URL}/valid_routes.csv"
 REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
@@ -26,11 +27,11 @@ CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
 # ------------------------------------------------------------------
-# 2. Cached data loaders (first load ~2‑3 min, then instant)
+# 2. Cached data loaders (first load ~1-2 min, then instant)
 # ------------------------------------------------------------------
 @st.cache_data
 def load_flights():
-    df = pd.read_csv(CSV_URL)
+    df = pd.read_parquet(FLIGHTS_URL)
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
     return df
 
@@ -53,7 +54,7 @@ def load_models():
 # 3. Load everything once when the app starts
 # ------------------------------------------------------------------
 st.title("✈️ US Flight Delay Dashboard & Predictor")
-st.info("📡 Loading data from Hugging Face. First load may take 2‑3 minutes. Please wait...")
+st.info("📡 Loading data from Hugging Face. First load may take 1-2 minutes. Please wait...")
 
 with st.spinner("Loading flights, airports, routes and models..."):
     flights = load_flights()
@@ -250,4 +251,4 @@ with tab4:
 
 # ------------------------------------------------------------------
 st.markdown("---")
-st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Models: Random Forest with class balancing (64% recall for late flights)")
+st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Parquet format for faster loading | Models: Random Forest with class balancing (64% recall for late flights)")
