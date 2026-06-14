@@ -5,25 +5,16 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 from datetime import datetime
 import plotly.express as px
-import plotly.graph_objects as go
 import joblib
 import numpy as np
 import requests
 from io import BytesIO
-import time
+import gc
 
-# Mobile-optimized page config
-st.set_page_config(
-    layout="wide",
-    page_title="Flight Delay Dashboard",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# ------------------------------------------------------------------
-# 1. Direct Hugging Face URLs (raw file access)
-# ------------------------------------------------------------------
+# Hugging Face URLs
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
-
 FLIGHTS_URL = f"{BASE_URL}/flights_dashboard_ready.parquet"
 AIRPORTS_URL = f"{BASE_URL}/airports_filtered.csv"
 VALID_ROUTES_URL = f"{BASE_URL}/valid_routes.csv"
@@ -31,20 +22,27 @@ REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
 CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
-# ------------------------------------------------------------------
-# 2. Cached data loaders with timeout handling
-# ------------------------------------------------------------------
-@st.cache_data(ttl=86400)  # Cache for 24 hours
+# Memory-optimized data loading
+@st.cache_data(ttl=86400)
 def load_flights():
-    start = time.time()
-    df = pd.read_parquet(FLIGHTS_URL)
+    # Read only essential columns
+    columns = ['FL_DATE', 'ORIGIN', 'DEST', 'AIRLINE', 'DEP_DELAY', 'ARR_DELAY', 'ELAPSED_TIME', 'DISTANCE']
+    df = pd.read_parquet(FLIGHTS_URL, columns=columns)
+    
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
-    st.session_state['flights_load_time'] = time.time() - start
+    
+    # Downcast numeric columns to save memory
+    for col in ['DEP_DELAY', 'ARR_DELAY', 'ELAPSED_TIME', 'DISTANCE']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], downcast='float')
+    
     return df
 
 @st.cache_data(ttl=86400)
 def load_airports():
-    return pd.read_csv(AIRPORTS_URL)
+    df = pd.read_csv(AIRPORTS_URL)
+    # Keep only essential columns
+    return df[['AIRPORT_CODE', 'name', 'city', 'state', 'latitude', 'longitude']]
 
 @st.cache_data(ttl=86400)
 def load_valid_routes():
@@ -52,256 +50,158 @@ def load_valid_routes():
 
 @st.cache_resource(ttl=86400)
 def load_models():
-    start = time.time()
-    reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL, timeout=120).content))
-    clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL, timeout=120).content))
-    encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=120).content))
-    st.session_state['models_load_time'] = time.time() - start
+    reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL, timeout=180).content))
+    clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL, timeout=180).content))
+    encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
     return reg, clf, encoders
 
-# ------------------------------------------------------------------
-# 3. Load with progress indicators and mobile warning
-# ------------------------------------------------------------------
-st.title("✈️ US Flight Delay Dashboard & Predictor")
+# Load everything
+st.title("✈️ US Flight Delay Dashboard")
 
-# Detect if mobile (simple check)
-user_agent = st.context.headers.get('User-Agent', '').lower()
-is_mobile = 'mobile' in user_agent or 'android' in user_agent or 'iphone' in user_agent
-
-if is_mobile:
-    st.warning("⚠️ **Mobile users:** First load may take 2-3 minutes on slow connections. Please wait. The app will be cached after first visit.")
-else:
-    st.info("📡 Loading data from Hugging Face. First load may take 1-2 minutes. Please wait...")
-
-progress_bar = st.progress(0)
-status_text = st.empty()
-
-try:
-    status_text.text("Loading flights data (0/4)...")
+with st.spinner("Loading data (first time only, please wait)..."):
     flights = load_flights()
-    progress_bar.progress(25)
-    
-    status_text.text("Loading airports (1/4)...")
     airports = load_airports()
-    progress_bar.progress(50)
-    
-    status_text.text("Loading routes (2/4)...")
     valid_routes_df = load_valid_routes()
-    progress_bar.progress(75)
-    
-    status_text.text("Loading ML models (3/4)...")
     reg_model, clf_model, encoders = load_models()
-    progress_bar.progress(100)
-    
-    status_text.empty()
-    progress_bar.empty()
-    
-    # Show load times
-    if 'flights_load_time' in st.session_state:
-        st.success(f"✅ Ready! (Flights: {st.session_state.get('flights_load_time', 0):.1f}s | Models: {st.session_state.get('models_load_time', 0):.1f}s)")
-    else:
-        st.success("✅ All data and models ready!")
+    gc.collect()  # Force garbage collection
 
-except Exception as e:
-    st.error(f"Failed to load data: {str(e)[:200]}")
-    st.info("Please refresh the page. If the problem persists, try on a desktop or faster connection.")
-    st.stop()
+st.success("✅ Ready!")
 
-# ------------------------------------------------------------------
-# 4. Filter airports to contiguous US
-# ------------------------------------------------------------------
-contiguous_states = [
-    'AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA',
-    'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV',
-    'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD',
-    'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
-]
-airports_continental = airports[airports['state'].isin(contiguous_states)].copy()
+# Filter to continental US
+contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA',
+                     'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV',
+                     'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD',
+                     'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
+airports = airports[airports['state'].isin(contiguous_states)]
 
-# ------------------------------------------------------------------
-# 5. Sidebar filters
-# ------------------------------------------------------------------
+# Sidebar filters
 with st.sidebar:
-    st.header("Global Filters")
+    st.header("Filters")
     min_date = flights['FL_DATE'].min()
     max_date = flights['FL_DATE'].max()
     start_date = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
     end_date = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
+    
+    # Add force refresh button
+    if st.button("🔄 Force Refresh (Clear Cache)"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
 
 start_ts = pd.Timestamp(start_date)
 end_ts = pd.Timestamp(end_date)
 
+# Filter flights
 filtered_flights = flights[(flights['FL_DATE'] >= start_ts) & (flights['FL_DATE'] <= end_ts)]
-
 total_flights = len(filtered_flights)
 active_airports = filtered_flights['ORIGIN'].nunique()
 
-# ------------------------------------------------------------------
-# 6. Pre‑aggregate
-# ------------------------------------------------------------------
+# Pre-aggregate airport metrics
 @st.cache_data
-def get_airport_metrics(_filtered_flights, airports_cont):
-    airport_counts = _filtered_flights.groupby('ORIGIN').size().reset_index(name='total_flights')
-    airport_delays = _filtered_flights.groupby('ORIGIN')['DEP_DELAY'].mean().reset_index(name='avg_delay')
-    
-    metrics = airport_counts.merge(airport_delays, on='ORIGIN', how='left')
+def get_airport_metrics(_filtered_flights, _airports):
+    counts = _filtered_flights.groupby('ORIGIN').size().reset_index(name='total_flights')
+    delays = _filtered_flights.groupby('ORIGIN')['DEP_DELAY'].mean().reset_index(name='avg_delay')
+    metrics = counts.merge(delays, on='ORIGIN', how='left')
     metrics.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
-    metrics = metrics.merge(airports_cont, on='AIRPORT_CODE', how='inner')
+    metrics = metrics.merge(_airports, on='AIRPORT_CODE', how='inner')
     metrics['avg_delay'] = metrics['avg_delay'].round(1).fillna(0)
     return metrics
 
-airport_metrics = get_airport_metrics(filtered_flights, airports_continental)
+airport_metrics = get_airport_metrics(filtered_flights, airports)
 
-# Responsive map size
-if is_mobile:
-    map_width = 350
-    map_height = 400
-else:
-    map_width = 900
-    map_height = 500
+# Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map", "✈️ Airlines", "🏢 Airports", "🤖 Predictor"])
 
-# ------------------------------------------------------------------
-# 7. Tabs
-# ------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map View", "✈️ Airline Analysis", "🏢 Airport Analysis", "🤖 Delay Predictor"])
-
-# ---------------------------- TAB 1 : MAP ---------------------------------
 with tab1:
-    st.subheader("🗺️ Airport Departure Delay Map (Continental US)")
+    st.subheader("Airport Departure Delay Map")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Date Range", f"{start_date} to {end_date}")
+    c2.metric("Flights", f"{total_flights:,}")
+    c3.metric("Airports", active_airports)
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("📅 Date Range", f"{start_date} to {end_date}")
-    col2.metric("🛫 Total Flights", f"{total_flights:,}")
-    col3.metric("📍 Active Airports", active_airports)
-
-    heatmap_enabled = st.toggle("🔥 Heatmap Mode", value=False)
-    map_center = [39.8283, -98.5795]
-    m = folium.Map(location=map_center, zoom_start=4, tiles='CartoDB positron')
-
-    if heatmap_enabled:
+    heatmap = st.toggle("Heatmap Mode", value=False)
+    m = folium.Map(location=[39.8283, -98.5795], zoom_start=4, tiles='CartoDB positron')
+    
+    if heatmap:
         heat_data = airport_metrics[['latitude', 'longitude', 'total_flights']].values.tolist()
         HeatMap(heat_data, min_opacity=0.3, radius=15).add_to(m)
     else:
         for _, row in airport_metrics.iterrows():
             d = row['avg_delay']
-            if d < 0:
-                color = 'green'
-            elif d < 15:
-                color = 'blue'
-            elif d < 45:
-                color = 'orange'
-            else:
-                color = 'red'
+            if d < 0: color = 'green'
+            elif d < 15: color = 'blue'
+            elif d < 45: color = 'orange'
+            else: color = 'red'
             radius = max(4, min(20, row['total_flights'] / 1000))
             folium.CircleMarker(
                 location=[row['latitude'], row['longitude']],
                 radius=radius,
-                popup=f"{row['name']} ({row['AIRPORT_CODE']})<br>{int(row['total_flights']):,} flights<br>{d} min avg delay",
-                tooltip=f"{row['AIRPORT_CODE']}: {d} min",
-                color=color, fill=True, fill_color=color, fill_opacity=0.7
+                popup=f"{row['name']} ({row['AIRPORT_CODE']})<br>{int(row['total_flights']):,} flights<br>{d} min",
+                color=color, fill=True, fill_color=color
             ).add_to(m)
-
-    st_folium(m, width=map_width, height=map_height)
     
-    if is_mobile:
-        st.caption("💡 Tip: Rotate phone to landscape for better map view. Pinch to zoom.")
+    st_folium(m, width=900, height=500)
 
-# ---------------------------- TAB 2 : AIRLINE ANALYSIS --------------------
 with tab2:
-    st.subheader("✈️ Airline Performance Analysis")
-    airlines_list = sorted(filtered_flights['AIRLINE'].unique())
-    selected_airline = st.selectbox("Select Airline:", airlines_list)
-
-    airline_data = filtered_flights[filtered_flights['AIRLINE'] == selected_airline].groupby('ORIGIN').agg(
-        avg_delay=('DEP_DELAY', 'mean'),
-        flight_count=('DEP_DELAY', 'count')
+    st.subheader("Airline Performance")
+    airlines = sorted(filtered_flights['AIRLINE'].unique())
+    selected = st.selectbox("Select Airline:", airlines)
+    
+    data = filtered_flights[filtered_flights['AIRLINE'] == selected].groupby('ORIGIN').agg(
+        delay=('DEP_DELAY', 'mean'),
+        flights=('DEP_DELAY', 'count')
     ).reset_index()
-    airline_data = airline_data.merge(airports_continental[['AIRPORT_CODE', 'name', 'city', 'state']],
-                                      left_on='ORIGIN', right_on='AIRPORT_CODE', how='inner')
-    airline_data = airline_data[airline_data['flight_count'] >= 50]
-
-    if len(airline_data) > 0:
+    data = data.merge(airports[['AIRPORT_CODE', 'name']], left_on='ORIGIN', right_on='AIRPORT_CODE')
+    data = data[data['flights'] >= 50]
+    
+    if len(data) > 0:
         col1, col2 = st.columns(2)
         with col1:
             st.write("🔴 Worst Airports")
-            worst = airline_data.nlargest(10, 'avg_delay')[['AIRPORT_CODE', 'name', 'city', 'avg_delay', 'flight_count']]
-            st.dataframe(worst, width='stretch')
+            st.dataframe(data.nlargest(10, 'delay')[['AIRPORT_CODE', 'name', 'delay', 'flights']])
         with col2:
             st.write("🟢 Best Airports")
-            best = airline_data.nsmallest(10, 'avg_delay')[['AIRPORT_CODE', 'name', 'city', 'avg_delay', 'flight_count']]
-            st.dataframe(best, width='stretch')
+            st.dataframe(data.nsmallest(10, 'delay')[['AIRPORT_CODE', 'name', 'delay', 'flights']])
+        
+        fig = px.bar(data, x='AIRPORT_CODE', y='delay', title=f"{selected} - Delay by Airport")
+        st.plotly_chart(fig, use_container_width=True)
 
-        fig = px.bar(airline_data, x='AIRPORT_CODE', y='avg_delay', color='avg_delay',
-                     title=f"Average Delay by Airport – {selected_airline}", height=500)
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, width='stretch')
-    else:
-        st.warning(f"No data for {selected_airline} in the selected date range.")
-
-# ---------------------------- TAB 3 : AIRPORT ANALYSIS --------------------
 with tab3:
-    st.subheader("🏢 Airport Performance Analysis")
+    st.subheader("Airport Comparison")
     available = sorted(airport_metrics['AIRPORT_CODE'].unique())
-    selected = st.multiselect("Select airports to compare:", available, default=['ATL', 'DFW', 'DEN'])
-
+    selected = st.multiselect("Select Airports:", available, default=['ATL', 'DFW', 'DEN'])
     if selected:
-        comp_data = airport_metrics[airport_metrics['AIRPORT_CODE'].isin(selected)].copy()
-        late_pct = filtered_flights[filtered_flights['ORIGIN'].isin(selected)].groupby('ORIGIN')['DEP_DELAY'].apply(
-            lambda x: (x > 15).mean() * 100).reset_index(name='pct_late')
-        comp_data = comp_data.merge(late_pct, left_on='AIRPORT_CODE', right_on='ORIGIN', how='left')
-        comp_data['pct_late'] = comp_data['pct_late'].fillna(0).round(1)
+        comp = airport_metrics[airport_metrics['AIRPORT_CODE'].isin(selected)]
+        st.dataframe(comp[['AIRPORT_CODE', 'name', 'city', 'total_flights', 'avg_delay']])
+        
+        fig = px.bar(comp, x='AIRPORT_CODE', y='avg_delay', title="Airport Delay Comparison")
+        st.plotly_chart(fig, use_container_width=True)
 
-        st.dataframe(comp_data[['AIRPORT_CODE', 'name', 'city', 'total_flights', 'avg_delay', 'pct_late']], width='stretch')
-        fig = px.bar(comp_data, x='AIRPORT_CODE', y='avg_delay', color='pct_late',
-                     title="Airport Comparison – Average Delay & % Late")
-        st.plotly_chart(fig, width='stretch')
-
-# ---------------------------- TAB 4 : DELAY PREDICTOR ---------------------
 with tab4:
-    st.subheader("🤖 Flight Delay Predictor")
-    st.markdown("Predicts departure delay based on historical patterns for your route, airline, and time.")
-
-    valid_origins = sorted(valid_routes_df['ORIGIN'].unique())
-    col1, col2 = st.columns(2)
-
-    with col1:
-        origin = st.selectbox("Origin Airport:", valid_origins[:50])
-        dest_options = valid_routes_df[valid_routes_df['ORIGIN'] == origin]['DEST'].unique()
-        destination = st.selectbox("Destination Airport:", sorted(dest_options)[:50])
-        airline = st.selectbox("Airline:", sorted(encoders['AIRLINE'].classes_))
-
-    with col2:
-        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        day_of_week = st.selectbox("Day of Week:", range(7), format_func=lambda x: days[x])
-        hour = st.slider("Departure Hour (24h):", 0, 23, 12)
-        month = st.slider("Month:", 1, 12, 6)
-
-    if st.button("🔮 Predict Delay", type="primary", use_container_width=True):
+    st.subheader("Delay Predictor")
+    origins = sorted(valid_routes_df['ORIGIN'].unique())
+    origin = st.selectbox("Origin:", origins[:50])
+    dests = valid_routes_df[valid_routes_df['ORIGIN'] == origin]['DEST'].unique()
+    dest = st.selectbox("Destination:", sorted(dests)[:50])
+    airline = st.selectbox("Airline:", sorted(encoders['AIRLINE'].classes_))
+    days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    dow = st.selectbox("Day of Week:", range(7), format_func=lambda x: days[x])
+    hour = st.slider("Hour:", 0, 23, 12)
+    month = st.slider("Month:", 1, 12, 6)
+    
+    if st.button("Predict Delay"):
         try:
-            features = np.array([[
+            feat = np.array([[
                 encoders['ORIGIN'].transform([origin])[0],
-                encoders['DEST'].transform([destination])[0],
+                encoders['DEST'].transform([dest])[0],
                 encoders['AIRLINE'].transform([airline])[0],
-                hour, day_of_week, month
+                hour, dow, month
             ]])
-            pred_delay = reg_model.predict(features)[0]
-            prob_late = clf_model.predict_proba(features)[0][1]
-
-            st.success(f"**Expected departure delay:** {pred_delay:.0f} minutes")
-            st.info(f"**Probability of being late (>15 min):** {prob_late*100:.0f}%")
-
-            if pred_delay < 0:
-                st.success("🟢 Expected to depart EARLY")
-            elif pred_delay < 15:
-                st.success("🟢 Expected ON TIME")
-            elif pred_delay < 45:
-                st.warning("🟡 Expected MINOR delay (15–45 min)")
-            else:
-                st.error("🔴 Expected SIGNIFICANT delay (>45 min)")
-
+            delay = reg_model.predict(feat)[0]
+            prob = clf_model.predict_proba(feat)[0][1]
+            st.success(f"Expected delay: {delay:.0f} minutes")
+            st.info(f"Probability of being late (>15 min): {prob*100:.0f}%")
         except Exception as e:
             st.error(f"Prediction error: {e}")
-            st.info("Try another route – the model may not have seen this origin–destination pair.")
 
-st.markdown("---")
-st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face")
+st.caption("Memory optimized | Refresh if slow")
