@@ -10,12 +10,13 @@ import joblib
 import numpy as np
 import requests
 from io import BytesIO
+import time
 
 # Mobile-optimized page config
 st.set_page_config(
     layout="wide",
     page_title="Flight Delay Dashboard",
-    initial_sidebar_state="collapsed"  # Better on mobile
+    initial_sidebar_state="collapsed"
 )
 
 # ------------------------------------------------------------------
@@ -23,7 +24,6 @@ st.set_page_config(
 # ------------------------------------------------------------------
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
 
-# Using Parquet format (41 MB instead of 289 MB)
 FLIGHTS_URL = f"{BASE_URL}/flights_dashboard_ready.parquet"
 AIRPORTS_URL = f"{BASE_URL}/airports_filtered.csv"
 VALID_ROUTES_URL = f"{BASE_URL}/valid_routes.csv"
@@ -32,45 +32,83 @@ CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
 # ------------------------------------------------------------------
-# 2. Cached data loaders (first load ~1-2 min, then instant)
+# 2. Cached data loaders with timeout handling
 # ------------------------------------------------------------------
-@st.cache_data
+@st.cache_data(ttl=86400)  # Cache for 24 hours
 def load_flights():
+    start = time.time()
     df = pd.read_parquet(FLIGHTS_URL)
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
+    st.session_state['flights_load_time'] = time.time() - start
     return df
 
-@st.cache_data
+@st.cache_data(ttl=86400)
 def load_airports():
     return pd.read_csv(AIRPORTS_URL)
 
-@st.cache_data
+@st.cache_data(ttl=86400)
 def load_valid_routes():
     return pd.read_csv(VALID_ROUTES_URL)
 
-@st.cache_resource
+@st.cache_resource(ttl=86400)
 def load_models():
-    reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL).content))
-    clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL).content))
-    encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL).content))
+    start = time.time()
+    reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL, timeout=120).content))
+    clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL, timeout=120).content))
+    encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=120).content))
+    st.session_state['models_load_time'] = time.time() - start
     return reg, clf, encoders
 
 # ------------------------------------------------------------------
-# 3. Load everything once when the app starts
+# 3. Load with progress indicators and mobile warning
 # ------------------------------------------------------------------
 st.title("✈️ US Flight Delay Dashboard & Predictor")
-st.info("📡 Loading data from Hugging Face. First load may take 1-2 minutes. Please wait...")
 
-with st.spinner("Loading flights, airports, routes and models..."):
+# Detect if mobile (simple check)
+user_agent = st.context.headers.get('User-Agent', '').lower()
+is_mobile = 'mobile' in user_agent or 'android' in user_agent or 'iphone' in user_agent
+
+if is_mobile:
+    st.warning("⚠️ **Mobile users:** First load may take 2-3 minutes on slow connections. Please wait. The app will be cached after first visit.")
+else:
+    st.info("📡 Loading data from Hugging Face. First load may take 1-2 minutes. Please wait...")
+
+progress_bar = st.progress(0)
+status_text = st.empty()
+
+try:
+    status_text.text("Loading flights data (0/4)...")
     flights = load_flights()
+    progress_bar.progress(25)
+    
+    status_text.text("Loading airports (1/4)...")
     airports = load_airports()
+    progress_bar.progress(50)
+    
+    status_text.text("Loading routes (2/4)...")
     valid_routes_df = load_valid_routes()
+    progress_bar.progress(75)
+    
+    status_text.text("Loading ML models (3/4)...")
     reg_model, clf_model, encoders = load_models()
+    progress_bar.progress(100)
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    # Show load times
+    if 'flights_load_time' in st.session_state:
+        st.success(f"✅ Ready! (Flights: {st.session_state.get('flights_load_time', 0):.1f}s | Models: {st.session_state.get('models_load_time', 0):.1f}s)")
+    else:
+        st.success("✅ All data and models ready!")
 
-st.success("✅ All data and models ready!")
+except Exception as e:
+    st.error(f"Failed to load data: {str(e)[:200]}")
+    st.info("Please refresh the page. If the problem persists, try on a desktop or faster connection.")
+    st.stop()
 
 # ------------------------------------------------------------------
-# 4. Filter airports to contiguous US (for cleaner map)
+# 4. Filter airports to contiguous US
 # ------------------------------------------------------------------
 contiguous_states = [
     'AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA',
@@ -81,7 +119,7 @@ contiguous_states = [
 airports_continental = airports[airports['state'].isin(contiguous_states)].copy()
 
 # ------------------------------------------------------------------
-# 5. Sidebar: global date range filter (applies to all charts)
+# 5. Sidebar filters
 # ------------------------------------------------------------------
 with st.sidebar:
     st.header("Global Filters")
@@ -99,11 +137,10 @@ total_flights = len(filtered_flights)
 active_airports = filtered_flights['ORIGIN'].nunique()
 
 # ------------------------------------------------------------------
-# 6. Pre‑aggregate for map & airline analysis (cached per filter)
+# 6. Pre‑aggregate
 # ------------------------------------------------------------------
 @st.cache_data
 def get_airport_metrics(_filtered_flights, airports_cont):
-    # Flight counts and average delay per airport
     airport_counts = _filtered_flights.groupby('ORIGIN').size().reset_index(name='total_flights')
     airport_delays = _filtered_flights.groupby('ORIGIN')['DEP_DELAY'].mean().reset_index(name='avg_delay')
     
@@ -115,15 +152,8 @@ def get_airport_metrics(_filtered_flights, airports_cont):
 
 airport_metrics = get_airport_metrics(filtered_flights, airports_continental)
 
-# Detect screen size for map
-try:
-    # Try to get screen width from Streamlit (works on desktop)
-    screen_width = st.session_state.get('screen_width', 900)
-except:
-    screen_width = 900
-
-# Adjust map size for mobile
-if screen_width < 768:  # Mobile breakpoint
+# Responsive map size
+if is_mobile:
     map_width = 350
     map_height = 400
 else:
@@ -171,11 +201,10 @@ with tab1:
                 color=color, fill=True, fill_color=color, fill_opacity=0.7
             ).add_to(m)
 
-    # Mobile-responsive map display
     st_folium(m, width=map_width, height=map_height)
     
-    # Help text for mobile users
-    st.caption("💡 Tip: On mobile, rotate your screen to landscape for better map viewing")
+    if is_mobile:
+        st.caption("💡 Tip: Rotate phone to landscape for better map view. Pinch to zoom.")
 
 # ---------------------------- TAB 2 : AIRLINE ANALYSIS --------------------
 with tab2:
@@ -196,16 +225,16 @@ with tab2:
         with col1:
             st.write("🔴 Worst Airports")
             worst = airline_data.nlargest(10, 'avg_delay')[['AIRPORT_CODE', 'name', 'city', 'avg_delay', 'flight_count']]
-            st.dataframe(worst, use_container_width=True)
+            st.dataframe(worst, width='stretch')
         with col2:
             st.write("🟢 Best Airports")
             best = airline_data.nsmallest(10, 'avg_delay')[['AIRPORT_CODE', 'name', 'city', 'avg_delay', 'flight_count']]
-            st.dataframe(best, use_container_width=True)
+            st.dataframe(best, width='stretch')
 
         fig = px.bar(airline_data, x='AIRPORT_CODE', y='avg_delay', color='avg_delay',
                      title=f"Average Delay by Airport – {selected_airline}", height=500)
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     else:
         st.warning(f"No data for {selected_airline} in the selected date range.")
 
@@ -217,16 +246,15 @@ with tab3:
 
     if selected:
         comp_data = airport_metrics[airport_metrics['AIRPORT_CODE'].isin(selected)].copy()
-        # compute % late on the fly
         late_pct = filtered_flights[filtered_flights['ORIGIN'].isin(selected)].groupby('ORIGIN')['DEP_DELAY'].apply(
             lambda x: (x > 15).mean() * 100).reset_index(name='pct_late')
         comp_data = comp_data.merge(late_pct, left_on='AIRPORT_CODE', right_on='ORIGIN', how='left')
         comp_data['pct_late'] = comp_data['pct_late'].fillna(0).round(1)
 
-        st.dataframe(comp_data[['AIRPORT_CODE', 'name', 'city', 'total_flights', 'avg_delay', 'pct_late']], use_container_width=True)
+        st.dataframe(comp_data[['AIRPORT_CODE', 'name', 'city', 'total_flights', 'avg_delay', 'pct_late']], width='stretch')
         fig = px.bar(comp_data, x='AIRPORT_CODE', y='avg_delay', color='pct_late',
                      title="Airport Comparison – Average Delay & % Late")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 # ---------------------------- TAB 4 : DELAY PREDICTOR ---------------------
 with tab4:
@@ -275,6 +303,5 @@ with tab4:
             st.error(f"Prediction error: {e}")
             st.info("Try another route – the model may not have seen this origin–destination pair.")
 
-# ------------------------------------------------------------------
 st.markdown("---")
-st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Parquet format for faster loading | Models: Random Forest with class balancing")
+st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face")
