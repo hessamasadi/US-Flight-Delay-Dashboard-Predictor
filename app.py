@@ -14,7 +14,6 @@ import time
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# Hugging Face URLs
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
 FLIGHTS_URL = f"{BASE_URL}/flights_dashboard_ready.parquet"
 AIRPORTS_URL = f"{BASE_URL}/airports_filtered.csv"
@@ -23,7 +22,6 @@ REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
 CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
-# Memory-optimized data loading (no refresh button)
 @st.cache_data(ttl=86400)
 def load_flights():
     columns = ['FL_DATE', 'ORIGIN', 'DEST', 'AIRLINE', 'DEP_DELAY', 'ARR_DELAY', 'ELAPSED_TIME', 'DISTANCE']
@@ -50,57 +48,47 @@ def load_models():
     encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
     return reg, clf, encoders
 
-# Title
 st.title("✈️ US Flight Delay Dashboard")
 
-# Progress bar for loading
 progress_bar = st.progress(0, text="Initializing...")
 status_text = st.empty()
 
-# Step 1
 status_text.text("Step 1/4: Loading flight data...")
 progress_bar.progress(10, text="Loading flights...")
 flights = load_flights()
 progress_bar.progress(25, text="Flights loaded ✓")
 time.sleep(0.2)
 
-# Step 2
 status_text.text("Step 2/4: Loading airport data...")
 progress_bar.progress(35, text="Loading airports...")
 airports = load_airports()
 progress_bar.progress(50, text="Airports loaded ✓")
 time.sleep(0.2)
 
-# Step 3
 status_text.text("Step 3/4: Loading route data...")
 progress_bar.progress(60, text="Loading routes...")
 valid_routes_df = load_valid_routes()
 progress_bar.progress(75, text="Routes loaded ✓")
 time.sleep(0.2)
 
-# Step 4
 status_text.text("Step 4/4: Loading ML models...")
 progress_bar.progress(85, text="Loading models...")
 reg_model, clf_model, encoders = load_models()
 progress_bar.progress(100, text="Complete! ✓")
 time.sleep(0.3)
 
-# Clear progress indicators
 progress_bar.empty()
 status_text.empty()
 st.success("✅ All data loaded successfully!")
 
-# Garbage collection
 gc.collect()
 
-# Filter to continental US
 contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA',
                      'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV',
                      'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD',
                      'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
 airports = airports[airports['state'].isin(contiguous_states)]
 
-# Sidebar filters (no refresh button)
 with st.sidebar:
     st.header("Filters")
     min_date = flights['FL_DATE'].min()
@@ -111,12 +99,10 @@ with st.sidebar:
 start_ts = pd.Timestamp(start_date)
 end_ts = pd.Timestamp(end_date)
 
-# Filter flights
 filtered_flights = flights[(flights['FL_DATE'] >= start_ts) & (flights['FL_DATE'] <= end_ts)]
 total_flights = len(filtered_flights)
 active_airports = filtered_flights['ORIGIN'].nunique()
 
-# Pre-aggregate airport metrics
 @st.cache_data
 def get_airport_metrics(_filtered_flights, _airports):
     counts = _filtered_flights.groupby('ORIGIN').size().reset_index(name='total_flights')
@@ -129,7 +115,6 @@ def get_airport_metrics(_filtered_flights, _airports):
 
 airport_metrics = get_airport_metrics(filtered_flights, airports)
 
-# Tabs
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map", "✈️ Airlines", "🏢 Airports", "🤖 Predictor"])
 
 with tab1:
