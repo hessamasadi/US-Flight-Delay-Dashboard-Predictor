@@ -25,11 +25,9 @@ REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
 CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
-# Memory-optimized data loading with progress tracking
-# Note: Underscore prefixes (_progress_placeholder) tell Streamlit NOT to hash these arguments
+# Simple cached data loaders (no UI elements inside)
 @st.cache_data(ttl=86400)
-def load_flights(_progress_placeholder):
-    _progress_placeholder.text("📊 Loading flight data (Parquet)...")
+def load_flights():
     df = pd.read_parquet(FLIGHTS_URL)
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
     
@@ -42,57 +40,57 @@ def load_flights(_progress_placeholder):
     return df
 
 @st.cache_data(ttl=86400)
-def load_airports(_progress_placeholder):
-    _progress_placeholder.text("🗺️ Loading airport data...")
+def load_airports():
     df = pd.read_csv(AIRPORTS_URL)
     return df[['AIRPORT_CODE', 'name', 'city', 'state', 'latitude', 'longitude']]
 
 @st.cache_data(ttl=86400)
-def load_valid_routes(_progress_placeholder):
-    _progress_placeholder.text("🛣️ Loading route data...")
+def load_valid_routes():
     return pd.read_csv(VALID_ROUTES_URL)
 
 @st.cache_resource(ttl=86400)
-def load_models(_progress_placeholder):
-    _progress_placeholder.text("🤖 Loading ML models...")
+def load_models():
     reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL, timeout=180).content))
     clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL, timeout=180).content))
     encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
     return reg, clf, encoders
 
-# Initialize progress tracking
+# Initialize progress tracking (outside cached functions)
 st.title("✈️ US Flight Delay Dashboard & Predictor")
 
-# Create progress bar and status
-progress_bar = st.progress(0, text="Initializing...")
+progress_bar = st.progress(0)
 status_text = st.empty()
 
 # Step 1: Load flights
 status_text.text("Step 1/4: Loading flight data...")
-progress_bar.progress(10, text="Loading flights...")
-flights = load_flights(status_text)
-progress_bar.progress(25, text="Flights loaded ✓")
+progress_bar.progress(10)
+flights = load_flights()
+progress_bar.progress(25)
+status_text.text("✅ Flights loaded")
 time.sleep(0.3)
 
 # Step 2: Load airports
 status_text.text("Step 2/4: Loading airport data...")
-progress_bar.progress(35, text="Loading airports...")
-airports = load_airports(status_text)
-progress_bar.progress(50, text="Airports loaded ✓")
+progress_bar.progress(35)
+airports = load_airports()
+progress_bar.progress(50)
+status_text.text("✅ Airports loaded")
 time.sleep(0.3)
 
 # Step 3: Load routes
 status_text.text("Step 3/4: Loading route data...")
-progress_bar.progress(60, text="Loading routes...")
-valid_routes_df = load_valid_routes(status_text)
-progress_bar.progress(75, text="Routes loaded ✓")
+progress_bar.progress(60)
+valid_routes_df = load_valid_routes()
+progress_bar.progress(75)
+status_text.text("✅ Routes loaded")
 time.sleep(0.3)
 
 # Step 4: Load models
 status_text.text("Step 4/4: Loading ML models (this may take a moment)...")
-progress_bar.progress(85, text="Loading ML models...")
-reg_model, clf_model, encoders = load_models(status_text)
-progress_bar.progress(100, text="Complete! ✓")
+progress_bar.progress(85)
+reg_model, clf_model, encoders = load_models()
+progress_bar.progress(100)
+status_text.text("✅ Complete!")
 time.sleep(0.5)
 
 # Clear progress indicators
@@ -129,7 +127,6 @@ active_airports = filtered_flights['ORIGIN'].nunique()
 # Pre-aggregate airport metrics
 @st.cache_data
 def get_airport_metrics(_filtered_flights, _airports):
-    # Aggregate flights and delays per airport
     airport_counts = _filtered_flights.groupby('ORIGIN').size().reset_index(name='total_flights')
     airport_delays = _filtered_flights.groupby('ORIGIN')['DEP_DELAY'].mean().reset_index(name='avg_delay')
     
@@ -223,7 +220,6 @@ with tab3:
     if selected:
         comp_data = airport_metrics[airport_metrics['AIRPORT_CODE'].isin(selected)].copy()
         
-        # Calculate % late from filtered flights
         for airport in selected:
             airport_flights = filtered_flights[filtered_flights['ORIGIN'] == airport]
             pct_late = (airport_flights['DEP_DELAY'] > 15).mean() * 100 if len(airport_flights) > 0 else 0
