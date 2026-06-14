@@ -10,6 +10,7 @@ import numpy as np
 import requests
 from io import BytesIO
 import gc
+import time
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
@@ -22,26 +23,20 @@ REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
 CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
-# Memory-optimized data loading
+# Memory-optimized data loading (no refresh button)
 @st.cache_data(ttl=86400)
 def load_flights():
-    # Read only essential columns
     columns = ['FL_DATE', 'ORIGIN', 'DEST', 'AIRLINE', 'DEP_DELAY', 'ARR_DELAY', 'ELAPSED_TIME', 'DISTANCE']
     df = pd.read_parquet(FLIGHTS_URL, columns=columns)
-    
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
-    
-    # Downcast numeric columns to save memory
     for col in ['DEP_DELAY', 'ARR_DELAY', 'ELAPSED_TIME', 'DISTANCE']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], downcast='float')
-    
     return df
 
 @st.cache_data(ttl=86400)
 def load_airports():
     df = pd.read_csv(AIRPORTS_URL)
-    # Keep only essential columns
     return df[['AIRPORT_CODE', 'name', 'city', 'state', 'latitude', 'longitude']]
 
 @st.cache_data(ttl=86400)
@@ -55,17 +50,48 @@ def load_models():
     encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
     return reg, clf, encoders
 
-# Load everything
+# Title
 st.title("✈️ US Flight Delay Dashboard")
 
-with st.spinner("Loading data (first time only, please wait)..."):
-    flights = load_flights()
-    airports = load_airports()
-    valid_routes_df = load_valid_routes()
-    reg_model, clf_model, encoders = load_models()
-    gc.collect()  # Force garbage collection
+# Progress bar for loading
+progress_bar = st.progress(0, text="Initializing...")
+status_text = st.empty()
 
-st.success("✅ Ready!")
+# Step 1
+status_text.text("Step 1/4: Loading flight data...")
+progress_bar.progress(10, text="Loading flights...")
+flights = load_flights()
+progress_bar.progress(25, text="Flights loaded ✓")
+time.sleep(0.2)
+
+# Step 2
+status_text.text("Step 2/4: Loading airport data...")
+progress_bar.progress(35, text="Loading airports...")
+airports = load_airports()
+progress_bar.progress(50, text="Airports loaded ✓")
+time.sleep(0.2)
+
+# Step 3
+status_text.text("Step 3/4: Loading route data...")
+progress_bar.progress(60, text="Loading routes...")
+valid_routes_df = load_valid_routes()
+progress_bar.progress(75, text="Routes loaded ✓")
+time.sleep(0.2)
+
+# Step 4
+status_text.text("Step 4/4: Loading ML models...")
+progress_bar.progress(85, text="Loading models...")
+reg_model, clf_model, encoders = load_models()
+progress_bar.progress(100, text="Complete! ✓")
+time.sleep(0.3)
+
+# Clear progress indicators
+progress_bar.empty()
+status_text.empty()
+st.success("✅ All data loaded successfully!")
+
+# Garbage collection
+gc.collect()
 
 # Filter to continental US
 contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA',
@@ -74,19 +100,13 @@ contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID',
                      'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY']
 airports = airports[airports['state'].isin(contiguous_states)]
 
-# Sidebar filters
+# Sidebar filters (no refresh button)
 with st.sidebar:
     st.header("Filters")
     min_date = flights['FL_DATE'].min()
     max_date = flights['FL_DATE'].max()
     start_date = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
     end_date = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
-    
-    # Add force refresh button
-    if st.button("🔄 Force Refresh (Clear Cache)"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.rerun()
 
 start_ts = pd.Timestamp(start_date)
 end_ts = pd.Timestamp(end_date)
@@ -204,4 +224,4 @@ with tab4:
         except Exception as e:
             st.error(f"Prediction error: {e}")
 
-st.caption("Memory optimized | Refresh if slow")
+st.caption("Data source: US Flight Delays 2019–2023 | Optimized for performance")
