@@ -11,7 +11,12 @@ import numpy as np
 import requests
 from io import BytesIO
 
-st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
+# Mobile-optimized page config
+st.set_page_config(
+    layout="wide",
+    page_title="Flight Delay Dashboard",
+    initial_sidebar_state="collapsed"  # Better on mobile
+)
 
 # ------------------------------------------------------------------
 # 1. Direct Hugging Face URLs (raw file access)
@@ -78,11 +83,12 @@ airports_continental = airports[airports['state'].isin(contiguous_states)].copy(
 # ------------------------------------------------------------------
 # 5. Sidebar: global date range filter (applies to all charts)
 # ------------------------------------------------------------------
-st.sidebar.header("Global Filters")
-min_date = flights['FL_DATE'].min()
-max_date = flights['FL_DATE'].max()
-start_date = st.sidebar.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
-end_date = st.sidebar.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
+with st.sidebar:
+    st.header("Global Filters")
+    min_date = flights['FL_DATE'].min()
+    max_date = flights['FL_DATE'].max()
+    start_date = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
+    end_date = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
 
 start_ts = pd.Timestamp(start_date)
 end_ts = pd.Timestamp(end_date)
@@ -109,6 +115,21 @@ def get_airport_metrics(_filtered_flights, airports_cont):
 
 airport_metrics = get_airport_metrics(filtered_flights, airports_continental)
 
+# Detect screen size for map
+try:
+    # Try to get screen width from Streamlit (works on desktop)
+    screen_width = st.session_state.get('screen_width', 900)
+except:
+    screen_width = 900
+
+# Adjust map size for mobile
+if screen_width < 768:  # Mobile breakpoint
+    map_width = 350
+    map_height = 400
+else:
+    map_width = 900
+    map_height = 500
+
 # ------------------------------------------------------------------
 # 7. Tabs
 # ------------------------------------------------------------------
@@ -117,6 +138,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Map View", "✈️ Airline Analysis",
 # ---------------------------- TAB 1 : MAP ---------------------------------
 with tab1:
     st.subheader("🗺️ Airport Departure Delay Map (Continental US)")
+    
     col1, col2, col3 = st.columns(3)
     col1.metric("📅 Date Range", f"{start_date} to {end_date}")
     col2.metric("🛫 Total Flights", f"{total_flights:,}")
@@ -149,7 +171,11 @@ with tab1:
                 color=color, fill=True, fill_color=color, fill_opacity=0.7
             ).add_to(m)
 
-    st_folium(m, width=900, height=500)
+    # Mobile-responsive map display
+    st_folium(m, width=map_width, height=map_height)
+    
+    # Help text for mobile users
+    st.caption("💡 Tip: On mobile, rotate your screen to landscape for better map viewing")
 
 # ---------------------------- TAB 2 : AIRLINE ANALYSIS --------------------
 with tab2:
@@ -170,11 +196,11 @@ with tab2:
         with col1:
             st.write("🔴 Worst Airports")
             worst = airline_data.nlargest(10, 'avg_delay')[['AIRPORT_CODE', 'name', 'city', 'avg_delay', 'flight_count']]
-            st.dataframe(worst)
+            st.dataframe(worst, use_container_width=True)
         with col2:
             st.write("🟢 Best Airports")
             best = airline_data.nsmallest(10, 'avg_delay')[['AIRPORT_CODE', 'name', 'city', 'avg_delay', 'flight_count']]
-            st.dataframe(best)
+            st.dataframe(best, use_container_width=True)
 
         fig = px.bar(airline_data, x='AIRPORT_CODE', y='avg_delay', color='avg_delay',
                      title=f"Average Delay by Airport – {selected_airline}", height=500)
@@ -197,7 +223,7 @@ with tab3:
         comp_data = comp_data.merge(late_pct, left_on='AIRPORT_CODE', right_on='ORIGIN', how='left')
         comp_data['pct_late'] = comp_data['pct_late'].fillna(0).round(1)
 
-        st.dataframe(comp_data[['AIRPORT_CODE', 'name', 'city', 'total_flights', 'avg_delay', 'pct_late']])
+        st.dataframe(comp_data[['AIRPORT_CODE', 'name', 'city', 'total_flights', 'avg_delay', 'pct_late']], use_container_width=True)
         fig = px.bar(comp_data, x='AIRPORT_CODE', y='avg_delay', color='pct_late',
                      title="Airport Comparison – Average Delay & % Late")
         st.plotly_chart(fig, use_container_width=True)
@@ -251,4 +277,4 @@ with tab4:
 
 # ------------------------------------------------------------------
 st.markdown("---")
-st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Parquet format for faster loading | Models: Random Forest with class balancing (64% recall for late flights)")
+st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Parquet format for faster loading | Models: Random Forest with class balancing")
