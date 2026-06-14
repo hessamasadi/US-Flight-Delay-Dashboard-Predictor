@@ -10,13 +10,12 @@ import numpy as np
 import requests
 from io import BytesIO
 import gc
+import time
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# Hugging Face URLs (using your compressed/aggregated files)
+# Hugging Face URLs
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
-
-# Use daily_flight_aggregated.csv (compressed version) instead of huge CSV
 FLIGHTS_URL = f"{BASE_URL}/daily_flight_aggregated.csv"
 AIRPORTS_URL = f"{BASE_URL}/airports_filtered.csv"
 VALID_ROUTES_URL = f"{BASE_URL}/valid_routes.csv"
@@ -24,47 +23,79 @@ REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
 CLF_MODEL_URL = f"{BASE_URL}/delay_classifier_compressed.pkl"
 ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 
-# Memory-optimized data loading
+# Memory-optimized data loading with progress tracking
 @st.cache_data(ttl=86400)
-def load_flights():
-    # Read aggregated CSV (much smaller than original)
+def load_flights(progress_placeholder):
+    progress_placeholder.text("📊 Loading flight data...")
     df = pd.read_csv(FLIGHTS_URL)
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
     
-    # Downcast numeric columns to save memory
     for col in ['total_flights', 'avg_dep_delay', 'avg_arr_delay', 'median_dep_delay', 'pct_late', 'pct_early', 'pct_on_time']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], downcast='float')
-    
     return df
 
 @st.cache_data(ttl=86400)
-def load_airports():
+def load_airports(progress_placeholder):
+    progress_placeholder.text("🗺️ Loading airport data...")
     df = pd.read_csv(AIRPORTS_URL)
     return df[['AIRPORT_CODE', 'name', 'city', 'state', 'latitude', 'longitude']]
 
 @st.cache_data(ttl=86400)
-def load_valid_routes():
+def load_valid_routes(progress_placeholder):
+    progress_placeholder.text("🛣️ Loading route data...")
     return pd.read_csv(VALID_ROUTES_URL)
 
 @st.cache_resource(ttl=86400)
-def load_models():
+def load_models(progress_placeholder):
+    progress_placeholder.text("🤖 Loading ML models...")
     reg = joblib.load(BytesIO(requests.get(REG_MODEL_URL, timeout=180).content))
     clf = joblib.load(BytesIO(requests.get(CLF_MODEL_URL, timeout=180).content))
     encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
     return reg, clf, encoders
 
-# Load everything
+# Initialize progress tracking
 st.title("✈️ US Flight Delay Dashboard & Predictor")
 
-with st.spinner("Loading data (first time takes 1-2 minutes)..."):
-    flights = load_flights()
-    airports = load_airports()
-    valid_routes_df = load_valid_routes()
-    reg_model, clf_model, encoders = load_models()
-    gc.collect()
+# Create progress bar and status
+progress_bar = st.progress(0, text="Initializing...")
+status_text = st.empty()
 
-st.success("✅ All data and models ready!")
+# Step 1: Load flights
+status_text.text("Step 1/4: Loading flight data...")
+progress_bar.progress(10, text="Loading flights...")
+flights = load_flights(status_text)
+progress_bar.progress(25, text="Flights loaded ✓")
+time.sleep(0.3)
+
+# Step 2: Load airports
+status_text.text("Step 2/4: Loading airport data...")
+progress_bar.progress(35, text="Loading airports...")
+airports = load_airports(status_text)
+progress_bar.progress(50, text="Airports loaded ✓")
+time.sleep(0.3)
+
+# Step 3: Load routes
+status_text.text("Step 3/4: Loading route data...")
+progress_bar.progress(60, text="Loading routes...")
+valid_routes_df = load_valid_routes(status_text)
+progress_bar.progress(75, text="Routes loaded ✓")
+time.sleep(0.3)
+
+# Step 4: Load models
+status_text.text("Step 4/4: Loading ML models (this may take a moment)...")
+progress_bar.progress(85, text="Loading ML models...")
+reg_model, clf_model, encoders = load_models(status_text)
+progress_bar.progress(100, text="Complete! ✓")
+time.sleep(0.5)
+
+# Clear progress indicators
+progress_bar.empty()
+status_text.empty()
+st.success("✅ All data and models loaded successfully!")
+
+# Force garbage collection
+gc.collect()
 
 # Filter to continental US
 contiguous_states = ['AL', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'ID', 'IL', 'IN', 'IA',
@@ -92,7 +123,6 @@ active_airports = filtered_flights['ORIGIN'].nunique()
 # Pre-aggregate airport metrics
 @st.cache_data
 def get_airport_metrics(_filtered_flights, _airports):
-    # Aggregate flights and delays per airport
     airport_data = _filtered_flights.groupby('ORIGIN').agg(
         total_flights=('total_flights', 'sum'),
         avg_delay=('avg_dep_delay', 'mean')
@@ -187,7 +217,6 @@ with tab3:
     if selected:
         comp_data = airport_metrics[airport_metrics['AIRPORT_CODE'].isin(selected)].copy()
         
-        # Calculate additional metrics
         for airport in selected:
             airport_flights = filtered_flights[filtered_flights['ORIGIN'] == airport]
             pct_late = (airport_flights['avg_dep_delay'] > 15).mean() * 100 if len(airport_flights) > 0 else 0
@@ -248,6 +277,5 @@ with tab4:
             st.error(f"Prediction error: {e}")
             st.info("Try another route – the model may not have seen this origin–destination pair.")
 
-# ------------------------------------------------------------------
 st.markdown("---")
 st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Optimized for memory & performance")
