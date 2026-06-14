@@ -14,9 +14,11 @@ import time
 
 st.set_page_config(layout="wide", page_title="Flight Delay Dashboard")
 
-# Hugging Face URLs
+# Hugging Face URLs (using Parquet for flights)
 BASE_URL = "https://huggingface.co/hessamedin/flight-delay-models/resolve/main"
-FLIGHTS_URL = f"{BASE_URL}/daily_flight_aggregated.csv"
+
+# Use Parquet for flights (much faster and smaller)
+FLIGHTS_URL = f"{BASE_URL}/flights_dashboard_ready.parquet"
 AIRPORTS_URL = f"{BASE_URL}/airports_filtered.csv"
 VALID_ROUTES_URL = f"{BASE_URL}/valid_routes.csv"
 REG_MODEL_URL = f"{BASE_URL}/delay_regressor_compressed.pkl"
@@ -26,13 +28,16 @@ ENCODERS_URL = f"{BASE_URL}/label_encoders.pkl"
 # Memory-optimized data loading with progress tracking
 @st.cache_data(ttl=86400)
 def load_flights(progress_placeholder):
-    progress_placeholder.text("📊 Loading flight data...")
-    df = pd.read_csv(FLIGHTS_URL)
+    progress_placeholder.text("📊 Loading flight data (Parquet)...")
+    df = pd.read_parquet(FLIGHTS_URL)
     df['FL_DATE'] = pd.to_datetime(df['FL_DATE'])
     
-    for col in ['total_flights', 'avg_dep_delay', 'avg_arr_delay', 'median_dep_delay', 'pct_late', 'pct_early', 'pct_on_time']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], downcast='float')
+    # Downcast numeric columns to save memory
+    for col in df.select_dtypes(include=['float64']).columns:
+        df[col] = df[col].astype('float32')
+    for col in df.select_dtypes(include=['int64']).columns:
+        df[col] = df[col].astype('int32')
+    
     return df
 
 @st.cache_data(ttl=86400)
@@ -117,19 +122,19 @@ end_ts = pd.Timestamp(end_date)
 # Filter flights by date range
 filtered_flights = flights[(flights['FL_DATE'] >= start_ts) & (flights['FL_DATE'] <= end_ts)]
 
-total_flights = filtered_flights['total_flights'].sum() if 'total_flights' in filtered_flights.columns else len(filtered_flights)
+total_flights = len(filtered_flights)
 active_airports = filtered_flights['ORIGIN'].nunique()
 
 # Pre-aggregate airport metrics
 @st.cache_data
 def get_airport_metrics(_filtered_flights, _airports):
-    airport_data = _filtered_flights.groupby('ORIGIN').agg(
-        total_flights=('total_flights', 'sum'),
-        avg_delay=('avg_dep_delay', 'mean')
-    ).reset_index()
-    airport_data.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+    # Aggregate flights and delays per airport
+    airport_counts = _filtered_flights.groupby('ORIGIN').size().reset_index(name='total_flights')
+    airport_delays = _filtered_flights.groupby('ORIGIN')['DEP_DELAY'].mean().reset_index(name='avg_delay')
     
-    metrics = airport_data.merge(_airports, on='AIRPORT_CODE', how='inner')
+    metrics = airport_counts.merge(airport_delays, on='ORIGIN', how='left')
+    metrics.rename(columns={'ORIGIN': 'AIRPORT_CODE'}, inplace=True)
+    metrics = metrics.merge(_airports, on='AIRPORT_CODE', how='inner')
     metrics['avg_delay'] = metrics['avg_delay'].round(1).fillna(0)
     return metrics
 
@@ -165,7 +170,7 @@ with tab1:
                 color = 'orange'
             else:
                 color = 'red'
-            radius = max(4, min(20, row['total_flights'] / 5000))
+            radius = max(4, min(20, row['total_flights'] / 1000))
             folium.CircleMarker(
                 location=[row['latitude'], row['longitude']],
                 radius=radius,
@@ -183,8 +188,8 @@ with tab2:
     selected_airline = st.selectbox("Select Airline:", airlines_list)
 
     airline_data = filtered_flights[filtered_flights['AIRLINE'] == selected_airline].groupby('ORIGIN').agg(
-        avg_delay=('avg_dep_delay', 'mean'),
-        flight_count=('total_flights', 'sum')
+        avg_delay=('DEP_DELAY', 'mean'),
+        flight_count=('DEP_DELAY', 'count')
     ).reset_index()
     airline_data = airline_data.merge(airports_continental[['AIRPORT_CODE', 'name', 'city', 'state']],
                                       left_on='ORIGIN', right_on='AIRPORT_CODE', how='inner')
@@ -217,9 +222,10 @@ with tab3:
     if selected:
         comp_data = airport_metrics[airport_metrics['AIRPORT_CODE'].isin(selected)].copy()
         
+        # Calculate % late from filtered flights
         for airport in selected:
             airport_flights = filtered_flights[filtered_flights['ORIGIN'] == airport]
-            pct_late = (airport_flights['avg_dep_delay'] > 15).mean() * 100 if len(airport_flights) > 0 else 0
+            pct_late = (airport_flights['DEP_DELAY'] > 15).mean() * 100 if len(airport_flights) > 0 else 0
             comp_data.loc[comp_data['AIRPORT_CODE'] == airport, 'pct_late'] = round(pct_late, 1)
 
         comp_data['pct_late'] = comp_data['pct_late'].fillna(0).round(1)
@@ -278,4 +284,4 @@ with tab4:
             st.info("Try another route – the model may not have seen this origin–destination pair.")
 
 st.markdown("---")
-st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Optimized for memory & performance")
+st.caption("Data source: US Flight Delays 2019–2023 (Kaggle) | Hosted on Hugging Face | Optimized with Parquet for fast loading")
