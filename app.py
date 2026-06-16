@@ -48,7 +48,7 @@ def load_models():
     encoders = joblib.load(BytesIO(requests.get(ENCODERS_URL, timeout=180).content))
     return reg, clf, encoders
 
-st.title("✈️ US Flight Delay Dashboard")
+st.title("US Flight Delay Dashboard")
 
 progress_bar = st.progress(0, text="Initializing...")
 status_text = st.empty()
@@ -79,7 +79,7 @@ time.sleep(0.3)
 
 progress_bar.empty()
 status_text.empty()
-st.success("✅ All data loaded successfully!")
+st.success("All data loaded successfully!")
 
 gc.collect()
 
@@ -162,10 +162,10 @@ with tab2:
     if len(data) > 0:
         col1, col2 = st.columns(2)
         with col1:
-            st.write("🔴 Worst Airports")
+            st.write("Worst Airports")
             st.dataframe(data.nlargest(10, 'delay')[['AIRPORT_CODE', 'name', 'delay', 'flights']])
         with col2:
-            st.write("🟢 Best Airports")
+            st.write("Best Airports")
             st.dataframe(data.nsmallest(10, 'delay')[['AIRPORT_CODE', 'name', 'delay', 'flights']])
         
         fig = px.bar(data, x='AIRPORT_CODE', y='delay', title=f"{selected} - Delay by Airport")
